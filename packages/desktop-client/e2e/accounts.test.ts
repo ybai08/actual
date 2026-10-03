@@ -233,6 +233,82 @@ test.describe('Accounts', () => {
     await expect(accountPage.selectButton).toHaveText('2 transactions');
   });
 
+  test('running balance still counts hidden reconciled transactions after a reload', async () => {
+    accountPage = await navigation.createAccount({
+      name: 'Reload Balance',
+      offBudget: false,
+      balance: 0,
+    });
+    await accountPage.waitFor();
+
+    for (const note of ['one', 'two', 'three']) {
+      await accountPage.createSingleTransaction({
+        payee: '',
+        notes: `reload-${note}`,
+        debit: '10.00',
+      });
+    }
+
+    // Reconcile and lock the oldest transaction.
+    await accountPage.transactionTableRow
+      .filter({ hasText: 'reload-one' })
+      .getByTestId('cleared')
+      .click();
+    await page.getByRole('button', { name: 'Reconcile' }).click();
+    const reconcilePopover = page.locator('[data-popover]');
+    await reconcilePopover.getByRole('textbox').waitFor();
+    await reconcilePopover.getByRole('button', { name: 'Reconcile' }).click();
+    await page.getByRole('button', { name: 'Lock transactions' }).click();
+
+    await accountPage.setTransactionColumnVisibility('balance', true);
+    await accountPage.accountMenuButton.click();
+    await page
+      .getByRole('button', { name: 'Hide reconciled transactions' })
+      .click();
+
+    const newest = accountPage.transactionTableRow.filter({
+      hasText: 'reload-three',
+    });
+    await expect(newest.getByTestId('balance')).toHaveText('-30.00');
+
+    // On a slow budget the account list can arrive after the account page
+    // has built its transactions query. Hold it back until the page asks
+    // for the row count, which it does right after building the query.
+    await page.addInitScript(() => {
+      const held: Array<() => void> = [];
+      let released = false;
+      for (const proto of [Worker.prototype, MessagePort.prototype]) {
+        const postMessage = proto.postMessage;
+        proto.postMessage = function (
+          this: Worker | MessagePort,
+          message: { name?: string; args?: { selectExpressions?: unknown } },
+          ...rest: [Transferable[]?]
+        ) {
+          if (!released && message?.name === 'accounts-get') {
+            held.push(() => postMessage.call(this, message, ...rest));
+            return;
+          }
+          postMessage.call(this, message, ...rest);
+          if (
+            !released &&
+            message?.name === 'query' &&
+            JSON.stringify(message.args?.selectExpressions) ===
+              '[{"result":{"$count":"*"}}]'
+          ) {
+            released = true;
+            held.forEach(send => send());
+          }
+        } as typeof proto.postMessage;
+      }
+    });
+
+    // The hidden reconciled transaction must still be part of the running
+    // balance once the page is built again.
+    await page.reload();
+    await accountPage.waitFor();
+    await expect(newest.getByTestId('balance')).toHaveText('-30.00');
+  });
+
   test.describe('On Budget Accounts', () => {
     // Reset filters
     test.afterEach(async () => {

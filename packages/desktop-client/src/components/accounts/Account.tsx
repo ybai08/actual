@@ -685,12 +685,10 @@ class AccountInternal extends PureComponent<
   };
 
   canCalculateBalance = () => {
-    const accountId = this.props.accountId;
-    const account = this.props.accounts.find(
-      account => account.id === accountId,
-    );
-
-    if (!account) return false;
+    // Decided from the id, not from the loaded account list: the list can
+    // arrive after the transactions query is built, and the query and the
+    // balances must agree on whether hidden reconciled rows are counted.
+    if (this.showAccountColumn()) return false;
     if (this.state.search !== '') return false;
     if (this.state.filterConditions.length > 0) return false;
     if (this.state.sort === null) {
